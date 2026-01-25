@@ -49,6 +49,46 @@ local model_options_schema = {
     additionalProperties = true,
 }
 
+-- Anthropic options schema
+local anthropic_model_options_schema = {
+    description = "Key/value settings for the Anthropic model",
+    type = "object",
+    properties = {
+        model = {
+            type = "string",
+            description = "Anthropic model to execute (e.g., claude-3-opus-20240229).",
+        },
+        max_tokens = {
+            type = "integer",
+            description = "Maximum tokens in the response. Required for Anthropic.",
+            minimum = 1,
+        },
+        anthropic_version = {
+            type = "string",
+            description = "Anthropic API version (e.g., 2023-06-01).",
+            default = "2023-06-01",
+        },
+        temperature = {
+            type = "number",
+            description = "Temperature for sampling (0-1 for Anthropic).",
+            minimum = 0,
+            maximum = 1,
+        },
+        top_p = {
+            type = "number",
+            description = "Top-p sampling parameter.",
+            minimum = 0,
+            maximum = 1,
+        },
+        top_k = {
+            type = "integer",
+            description = "Top-k sampling parameter.",
+            minimum = 1,
+        },
+    },
+    additionalProperties = true,
+}
+
 local ai_instance_schema = {
     type = "array",
     minItems = 1,
@@ -151,6 +191,27 @@ _M.ai_proxy_schema = {
         },
     },
     required = {"provider", "auth"}
+}
+
+-- 为 ai_proxy_schema 添加条件验证：当 provider 为 anthropic 时，使用特定的 options schema
+_M.ai_proxy_schema_with_anthropic = {
+    type = "object",
+    allOf = {
+        _M.ai_proxy_schema,
+        {
+            if = {
+                properties = {
+                    provider = { const = "anthropic" }
+                }
+            },
+            then = {
+                properties = {
+                    options = anthropic_model_options_schema
+                },
+                required = {"options"}
+            }
+        }
+    }
 }
 
 _M.ai_proxy_multi_schema = {
