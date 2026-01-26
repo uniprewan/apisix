@@ -254,19 +254,14 @@ curl "http://127.0.0.1:9180/apisix/admin/routes" -X PUT \
           }
         },
         "options": {
-          "model": "claude-3-opus-20240229",
-          "anthropic_version": "2025-07-15",
+          "model": "claude-opus-4-5",
+          "anthropic_version": "2023-06-01",
           "max_tokens": 4096
         }
       }
     }
   }'
 ```
-
-:::note
-
-The model `claude-3-opus-20240229` is used here as an example. You can replace it with other models like `claude-3.5-sonnet-20240620` or future models like `claude-4.5-pro-20260101` as they become available. Similarly, the `anthropic_version` can be updated to future versions like `2026-01-01`.
-:::
 
 Send a POST request to the Route with a standard OpenAI-formatted message:
 
@@ -288,7 +283,7 @@ The plugin converts the request and proxies it to Anthropic. You should receive 
   "id": "chatcmpl-8sZ...",
   "object": "chat.completion",
   "created": 1707980... ,
-  "model": "claude-3-opus-20240229",
+  "model": "claude-opus-4-5",
   "choices": [
     {
       "index": 0,
