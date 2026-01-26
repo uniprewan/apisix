@@ -14,293 +14,185 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
-local schema_def = require("apisix.schema_def")
-local ai_drivers_schema = require("apisix.plugins.ai-drivers.schema")
 
-local _M = {}
 
-local auth_item_schema = {
-    type = "object",
-    patternProperties = {
-        ["^[a-zA-Z0-9._-]+$"] = {
-            type = "string"
-        }
-    }
-}
+-- THIS FILE IS TEMPORARILY CREATED AND WILL BE MERGED WITH THE OFFICIAL
+-- `test-ai-proxy.t` in the APISIX repository. It contains only the tests
+-- for the new Anthropic provider.
 
-local auth_schema = {
-    type = "object",
-    patternProperties = {
-        header = auth_item_schema,
-        query = auth_item_schema,
-    },
-    additionalProperties = false,
-}
 
-local model_options_schema = {
-    description = "Key/value settings for the model",
-    type = "object",
-    properties = {
-        model = {
-            type = "string",
-            description = "Model to execute.",
-        },
-    },
-    additionalProperties = true,
-}
 
--- Anthropic 特定的 options schema
-local anthropic_model_options_schema = {
-    description = "Key/value settings for the Anthropic model",
-    type = "object",
-    properties = {
-        model = {
-            type = "string",
-            description = "Anthropic model to execute (e.g., claude-3-opus-20240229).",
-        },
-        max_tokens = {
-            type = "integer",
-            description = "Maximum tokens in the response. Required for Anthropic.",
-            minimum = 1,
-        },
-        anthropic_version = {
-            type = "string",
-            description = "Anthropic API version (e.g., 2023-06-01).",
-            default = "2023-06-01",
-        },
-        temperature = {
-            type = "number",
-            description = "Temperature for sampling (0-1 for Anthropic).",
-            minimum = 0,
-            maximum = 1,
-        },
-        top_p = {
-            type = "number",
-            description = "Top-p sampling parameter.",
-            minimum = 0,
-            maximum = 1,
-        },
-        top_k = {
-            type = "integer",
-            description = "Top-k sampling parameter.",
-            minimum = 1,
-        },
-    },
-    additionalProperties = true,
-}
 
-local ai_instance_schema = {
-    type = "array",
-    minItems = 1,
-    items = {
-        type = "object",
-        properties = {
-            name = {
-                type = "string",
-                minLength = 1,
-                maxLength = 100,
-                description = "Name of the AI service instance.",
-            },
-            provider = {
-                type = "string",
-                description = "Type of the AI service instance.",
-                enum = ai_drivers_schema.providers,
-            },
-            priority = {
-                type = "integer",
-                description = "Priority of the provider for load balancing",
-                default = 0,
-            },
-            weight = {
-                type = "integer",
-                minimum = 0,
-            },
-            auth = auth_schema,
-            options = model_options_schema,
-            override = {
-                type = "object",
-                properties = {
-                    endpoint = {
-                        type = "string",
-                        description = "To be specified to override the endpoint of the AI Instance",
-                    },
-                },
-            },
-            checks = {
-                type = "object",
-                properties = {
-                    active = schema_def.health_checker_active,
-                },
-                required = {"active"}
-            }
-        },
-        required = {"name", "provider", "auth", "weight"}
-    },
-}
+run_tests();
 
-local logging_schema = {
-    type = "object",
-    properties = {
-        summaries = {
-            type = "boolean",
-            default = false,
-            description = "Record user request llm model, duration, req/res token"
-        },
-        payloads = {
-            type = "boolean",
-            default = false,
-            description = "Record user request and response payload"
-        }
-    }
-}
 
-_M.ai_proxy_schema = {
-    type = "object",
-    properties = {
-        provider = {
-            type = "string",
-            description = "Type of the AI service instance.",
-            enum = ai_drivers_schema.providers,
-        },
-        logging = logging_schema,
-        auth = auth_schema,
-        options = model_options_schema,
-        timeout = {
-            type = "integer",
-            minimum = 1,
-            default = 30000,
-            description = "timeout in milliseconds",
-        },
-        keepalive = {type = "boolean", default = true},
-        keepalive_timeout = {
-            type = "integer",
-            minimum = 1000,
-            default = 60000,
-            description = "keepalive timeout in milliseconds",
-        },
-        keepalive_pool = {type = "integer", minimum = 1, default = 30},
-        ssl_verify = {type = "boolean", default = true },
-        override = {
-            type = "object",
-            properties = {
-                endpoint = {
-                    type = "string",
-                    description = "To be specified to override the endpoint of the AI Instance",
-                },
-            },
-        },
-    },
-    required = {"provider", "auth"}
-}
 
--- 为 ai_proxy_schema 添加条件验证：当 provider 为 anthropic 时，使用特定的 options schema
-_M.ai_proxy_schema_with_anthropic = {
-    type = "object",
-    allOf = {
-        _M.ai_proxy_schema,
-        {
-            if = {
-                properties = {
-                    provider = { const = "anthropic" }
+
+__DATA__
+
+
+
+
+=== TEST 1: ai-proxy with anthropic provider - non-streaming
+--- config
+    location /anthropic_mock {
+        content_by_lua_block {
+            local core = require("apisix.core")
+            ngx.say([[{
+                "id": "msg_013Z5S7fEE4s3yA22b5c8x9f",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello from mock Anthropic!"
+                    }
+                ],
+                "model": "claude-opus-4-5",
+                "stop_reason": "end_turn",
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 20
                 }
-            },
-            then = {
-                properties = {
-                    options = anthropic_model_options_schema
-                },
-                required = {"options"}
-            }
+            }]])
         }
     }
-}
 
-_M.ai_proxy_multi_schema = {
-    type = "object",
-    properties = {
-        balancer = {
-            type = "object",
-            properties = {
-                algorithm = {
-                    type = "string",
-                    enum = { "chash", "roundrobin" },
-                },
-                hash_on = {
-                    type = "string",
-                    default = "vars",
-                    enum = {
-                      "vars",
-                      "header",
-                      "cookie",
-                      "consumer",
-                      "vars_combinations",
-                    },
-                },
-                key = {
-                    description = "the key of chash for dynamic load balancing",
-                    type = "string",
-                },
-            },
-            default = { algorithm = "roundrobin" }
-        },
-        instances = ai_instance_schema,
-        logging = logging_schema,
-        fallback_strategy = {
-            anyOf = {
-              {
-                type = "string",
-                enum = {"instance_health_and_rate_limiting", "http_429", "http_5xx"}
-              },
-              {
-                type = "array",
-                items = {
-                  type = "string",
-                  enum = {"rate_limiting", "http_429", "http_5xx"}
-                }
-              }
-            }
-        },
-        timeout = {
-            type = "integer",
-            minimum = 1,
-            default = 30000,
-            description = "timeout in milliseconds",
-        },
-        keepalive = {type = "boolean", default = true},
-        keepalive_timeout = {
-            type = "integer",
-            minimum = 1000,
-            default = 60000,
-            description = "keepalive timeout in milliseconds",
-        },
-        keepalive_pool = {type = "integer", minimum = 1, default = 30},
-        ssl_verify = {type = "boolean", default = true },
-    },
-    required = {"instances"}
-}
 
-_M.chat_request_schema = {
-    type = "object",
-    properties = {
-        messages = {
-            type = "array",
-            minItems = 1,
-            items = {
-                properties = {
-                    role = {
-                        type = "string",
-                        enum = {"system", "user", "assistant"}
-                    },
-                    content = {
-                        type = "string",
-                        minLength = "1",
-                    },
-                },
-                additionalProperties = false,
-                required = {"role", "content"},
-            },
+    location /v1/chat/completions {
+        proxy_pass http://127.0.0.1:$server_port/anthropic_mock;
+    }
+--- apisix_yaml
+routes:
+  - id: 1
+    uri: /anthropic/chat/completions
+    plugins:
+      ai-proxy:
+        model:
+          provider: anthropic
+          name: claude-opus-4-5
+        auth:
+          header:
+            x-api-key: "DUMMY_KEY"
+    upstream:
+      nodes:
+        "127.0.0.1:1980": 1
+      scheme: http
+--- request
+POST /anthropic/chat/completions
+{
+    "model": "claude-opus-4-5",
+    "messages": [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Hello"}
+    ]
+}
+--- response_body_like
+^{"id":"msg_013Z5S7fEE4s3yA22b5c8x9f","object":"chat.completion",.+,"model":"claude-opus-4-5","choices":.+,"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}
+--- error_log
+
+
+
+
+=== TEST 2: ai-proxy with anthropic provider - streaming
+--- config
+    location /anthropic_mock_stream {
+        content_by_lua_block {
+            ngx.say("event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_stream_123\", \"type\": \"message\", \"role\": \"assistant\", \"content\": [], \"model\": \"claude-opus-4-5\", \"usage\": {\"input_tokens\": 25}}}\n\n")
+            ngx.say("event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"text\", \"text\": \"\"}}\n\n")
+            ngx.say("event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \"Hello\"}}\n\n")
+            ngx.say("event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"text_delta\", \"text\": \" world!\"}}\n\n")
+            ngx.say("event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"end_turn\", \"stop_sequence\":null}, \"usage\":{\"output_tokens\": 30}}\n\n")
+            ngx.say("event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n")
         }
-    },
-    required = {"messages"}
-}
+    }
 
-return  _M
+
+    location /v1/chat/completions {
+        proxy_pass http://127.0.0.1:$server_port/anthropic_mock_stream;
+    }
+--- apisix_yaml
+routes:
+  - id: 1
+    uri: /anthropic/chat/completions/stream
+    plugins:
+      ai-proxy:
+        model:
+          provider: anthropic
+          name: claude-opus-4-5
+    upstream:
+      nodes:
+        "127.0.0.1:1980": 1
+      scheme: http
+--- request
+POST /anthropic/chat/completions/stream
+{
+    "model": "claude-opus-4-5",
+    "messages": [
+        {"role": "user", "content": "Hello"}
+    ],
+    "stream": true
+}
+--- response_body_like
+data: {"id":"msg_stream_123","object":"chat.completion.chunk",.+,"choices":.+"role":"assistant","content":""}}
+
+data: {"id":"msg_stream_123","object":"chat.completion.chunk",.+,"choices":.+"content":"Hello"}}
+
+data: {"id":"msg_stream_123","object":"chat.completion.chunk",.+,"choices":.+"content":" world!"}}
+
+data: {"id":"msg_stream_123","object":"chat.completion.chunk",.+,"choices":.+"finish_reason":"end_turn"}}
+
+data: [DONE]
+
+--- error_log
+ai-proxy.anthropic header_filter phase for stream
+
+
+
+
+=== TEST 3: ai-proxy with anthropic provider - error response
+--- config
+    location /anthropic_mock_error {
+        content_by_lua_block {
+            ngx.status = 400
+            ngx.say([[{
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": "Invalid request"
+                }
+            }]])
+        }
+    }
+
+
+    location /v1/chat/completions {
+        proxy_pass http://127.0.0.1:$server_port/anthropic_mock_error;
+    }
+--- apisix_yaml
+routes:
+  - id: 1
+    uri: /anthropic/chat/completions/error
+    plugins:
+      ai-proxy:
+        model:
+          provider: anthropic
+          name: claude-opus-4-5
+    upstream:
+      nodes:
+        "127.0.0.1:1980": 1
+      scheme: http
+--- request
+POST /anthropic/chat/completions/error
+{
+    "model": "claude-opus-4-5",
+    "messages": [
+        {"role": "user", "content": "Hello"}
+    ]
+}
+--- status: 400
+--- response_body_like
+^{"error":{"message":"Invalid request","type":"invalid_request_error"}}
+--- error_log
+
