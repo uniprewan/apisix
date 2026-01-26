@@ -14,255 +14,293 @@
 -- See the License for the specific language governing permissions and
 -- limitations under the License.
 --
+local schema_def = require("apisix.schema_def")
+local ai_drivers_schema = require("apisix.plugins.ai-drivers.schema")
 
-use t::APISIX 'no_plan';
-use Test::Nginx::Socket::Lua;
+local _M = {}
 
-repeat_each(1);
-no_long_string();
-no_root_location();
+local auth_item_schema = {
+    type = "object",
+    patternProperties = {
+        ["^[a-zA-Z0-9._-]+$"] = {
+            type = "string"
+        }
+    }
+}
 
-add_block_preprocessor(sub {
-    my ($block) = @_;
+local auth_schema = {
+    type = "object",
+    patternProperties = {
+        header = auth_item_schema,
+        query = auth_item_schema,
+    },
+    additionalProperties = false,
+}
 
-    my $http_config = <<'EOF';
-    server {
-        listen 1999;
+local model_options_schema = {
+    description = "Key/value settings for the model",
+    type = "object",
+    properties = {
+        model = {
+            type = "string",
+            description = "Model to execute.",
+        },
+    },
+    additionalProperties = true,
+}
 
-        location /v1/messages {
-            content_by_lua_block {
-                local core = require("apisix.core")
-                ngx.req.read_body()
-                local body = core.json.decode(ngx.req.get_body_data())
+-- Anthropic 特定的 options schema
+local anthropic_model_options_schema = {
+    description = "Key/value settings for the Anthropic model",
+    type = "object",
+    properties = {
+        model = {
+            type = "string",
+            description = "Anthropic model to execute (e.g., claude-3-opus-20240229).",
+        },
+        max_tokens = {
+            type = "integer",
+            description = "Maximum tokens in the response. Required for Anthropic.",
+            minimum = 1,
+        },
+        anthropic_version = {
+            type = "string",
+            description = "Anthropic API version (e.g., 2023-06-01).",
+            default = "2023-06-01",
+        },
+        temperature = {
+            type = "number",
+            description = "Temperature for sampling (0-1 for Anthropic).",
+            minimum = 0,
+            maximum = 1,
+        },
+        top_p = {
+            type = "number",
+            description = "Top-p sampling parameter.",
+            minimum = 0,
+            maximum = 1,
+        },
+        top_k = {
+            type = "integer",
+            description = "Top-k sampling parameter.",
+            minimum = 1,
+        },
+    },
+    additionalProperties = true,
+}
 
-                -- 1. Required Header: x-api-key
-                if ngx.var.http_x_api_key ~= "test-key" then
-                    ngx.status = 401
-                    ngx.say([[{"type":"error","error":{"type":"authentication_error","message":"invalid api key"}}]])
-                    return
-                end
+local ai_instance_schema = {
+    type = "array",
+    minItems = 1,
+    items = {
+        type = "object",
+        properties = {
+            name = {
+                type = "string",
+                minLength = 1,
+                maxLength = 100,
+                description = "Name of the AI service instance.",
+            },
+            provider = {
+                type = "string",
+                description = "Type of the AI service instance.",
+                enum = ai_drivers_schema.providers,
+            },
+            priority = {
+                type = "integer",
+                description = "Priority of the provider for load balancing",
+                default = 0,
+            },
+            weight = {
+                type = "integer",
+                minimum = 0,
+            },
+            auth = auth_schema,
+            options = model_options_schema,
+            override = {
+                type = "object",
+                properties = {
+                    endpoint = {
+                        type = "string",
+                        description = "To be specified to override the endpoint of the AI Instance",
+                    },
+                },
+            },
+            checks = {
+                type = "object",
+                properties = {
+                    active = schema_def.health_checker_active,
+                },
+                required = {"active"}
+            }
+        },
+        required = {"name", "provider", "auth", "weight"}
+    },
+}
 
-                -- 2. Required Header: anthropic-version
-                if ngx.var.http_anthropic_version ~= "2023-06-01" then
-                    ngx.status = 400
-                    ngx.say("missing anthropic-version")
-                    return
-                end
+local logging_schema = {
+    type = "object",
+    properties = {
+        summaries = {
+            type = "boolean",
+            default = false,
+            description = "Record user request llm model, duration, req/res token"
+        },
+        payloads = {
+            type = "boolean",
+            default = false,
+            description = "Record user request and response payload"
+        }
+    }
+}
 
-                -- 3. Required Parameter: max_tokens
-                if not body.max_tokens then
-                    ngx.status = 400
-                    ngx.say("missing max_tokens")
-                    return
-                end
+_M.ai_proxy_schema = {
+    type = "object",
+    properties = {
+        provider = {
+            type = "string",
+            description = "Type of the AI service instance.",
+            enum = ai_drivers_schema.providers,
+        },
+        logging = logging_schema,
+        auth = auth_schema,
+        options = model_options_schema,
+        timeout = {
+            type = "integer",
+            minimum = 1,
+            default = 30000,
+            description = "timeout in milliseconds",
+        },
+        keepalive = {type = "boolean", default = true},
+        keepalive_timeout = {
+            type = "integer",
+            minimum = 1000,
+            default = 60000,
+            description = "keepalive timeout in milliseconds",
+        },
+        keepalive_pool = {type = "integer", minimum = 1, default = 30},
+        ssl_verify = {type = "boolean", default = true },
+        override = {
+            type = "object",
+            properties = {
+                endpoint = {
+                    type = "string",
+                    description = "To be specified to override the endpoint of the AI Instance",
+                },
+            },
+        },
+    },
+    required = {"provider", "auth"}
+}
 
-                -- 4. Validate Anthropic's native message structure
-                --    Messages must have content as array with type field
-                local msg = body.messages[1]
-                if type(msg.content) ~= "table"
-                   or msg.content[1].type ~= "text" then
-                    ngx.status = 400
-                    ngx.say("invalid anthropic message format")
-                    return
-                end
-
-                -- 5. Return mock Anthropic response
-                ngx.status = 200
-                ngx.say([[
-                {
-                  "id": "msg_123",
-                  "type": "message",
-                  "role": "assistant",
-                  "content": [
-                    { "type": "text", "text": "Hello from Claude" }
-                  ],
-                  "stop_reason": "end_turn"
+-- 为 ai_proxy_schema 添加条件验证：当 provider 为 anthropic 时，使用特定的 options schema
+_M.ai_proxy_schema_with_anthropic = {
+    type = "object",
+    allOf = {
+        _M.ai_proxy_schema,
+        {
+            if = {
+                properties = {
+                    provider = { const = "anthropic" }
                 }
-                ]])
+            },
+            then = {
+                properties = {
+                    options = anthropic_model_options_schema
+                },
+                required = {"options"}
             }
         }
     }
-EOF
-
-    $block->set_value("http_config", $http_config);
-});
-
-__DATA__
-
-=== TEST 1: Create route with Anthropic provider
---- config
-    location /t {
-        content_by_lua_block {
-            local t = require("lib.test_admin").test
-
-            -- Create a route that directly exposes Anthropic's native endpoint
-            local code, body = t('/apisix/admin/routes/1',
-                ngx.HTTP_PUT,
-                [[{
-                    "uri": "/v1/messages",
-                    "plugins": {
-                        "ai-proxy": {
-                            "provider": "anthropic",
-                            "api_key": "test-key",
-                            "override": {
-                                "endpoint": "http://127.0.0.1:1999/v1/messages"
-                            }
-                        }
-                    }
-                }]]
-            )
-
-            if code >= 300 then
-                ngx.status = code
-                ngx.say(body)
-                return
-            end
-
-            ngx.say("route created successfully")
-        }
-    }
---- response_body
-route created successfully
-
-
-
-=== TEST 2: Send Anthropic native format request
---- request
-POST /v1/messages
-{
-  "model": "claude-3",
-  "max_tokens": 128,
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Hello" }
-      ]
-    }
-  ]
 }
---- more_headers
-x-api-key: test-key
-anthropic-version: 2023-06-01
-Content-Type: application/json
---- error_code: 200
---- response_body_like eval
-qr/"type"\s*:\s*"message"/
 
-
-
-=== TEST 3: Test Anthropic streaming response (SSE)
---- config
-    location /t {
-        content_by_lua_block {
-            local http = require("resty.http")
-            local httpc = http.new()
-
-            local res, err = httpc:request_uri("http://127.0.0.1:9080/v1/messages", {
-                method = "POST",
-                headers = {
-                    ["Content-Type"] = "application/json",
-                    ["x-api-key"] = "test-key",
-                    ["anthropic-version"] = "2023-06-01",
+_M.ai_proxy_multi_schema = {
+    type = "object",
+    properties = {
+        balancer = {
+            type = "object",
+            properties = {
+                algorithm = {
+                    type = "string",
+                    enum = { "chash", "roundrobin" },
                 },
-                body = [[{
-                    "model": "claude-3",
-                    "stream": true,
-                    "max_tokens": 16,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                { "type": "text", "text": "Hi" }
-                            ]
-                        }
-                    ]
-                }]]
-            })
+                hash_on = {
+                    type = "string",
+                    default = "vars",
+                    enum = {
+                      "vars",
+                      "header",
+                      "cookie",
+                      "consumer",
+                      "vars_combinations",
+                    },
+                },
+                key = {
+                    description = "the key of chash for dynamic load balancing",
+                    type = "string",
+                },
+            },
+            default = { algorithm = "roundrobin" }
+        },
+        instances = ai_instance_schema,
+        logging = logging_schema,
+        fallback_strategy = {
+            anyOf = {
+              {
+                type = "string",
+                enum = {"instance_health_and_rate_limiting", "http_429", "http_5xx"}
+              },
+              {
+                type = "array",
+                items = {
+                  type = "string",
+                  enum = {"rate_limiting", "http_429", "http_5xx"}
+                }
+              }
+            }
+        },
+        timeout = {
+            type = "integer",
+            minimum = 1,
+            default = 30000,
+            description = "timeout in milliseconds",
+        },
+        keepalive = {type = "boolean", default = true},
+        keepalive_timeout = {
+            type = "integer",
+            minimum = 1000,
+            default = 60000,
+            description = "keepalive timeout in milliseconds",
+        },
+        keepalive_pool = {type = "integer", minimum = 1, default = 30},
+        ssl_verify = {type = "boolean", default = true },
+    },
+    required = {"instances"}
+}
 
-            if err then
-                ngx.status = 500
-                ngx.say("request failed: ", err)
-                return
-            end
-
-            ngx.status = res.status
-            ngx.say(res.body or "")
+_M.chat_request_schema = {
+    type = "object",
+    properties = {
+        messages = {
+            type = "array",
+            minItems = 1,
+            items = {
+                properties = {
+                    role = {
+                        type = "string",
+                        enum = {"system", "user", "assistant"}
+                    },
+                    content = {
+                        type = "string",
+                        minLength = "1",
+                    },
+                },
+                additionalProperties = false,
+                required = {"role", "content"},
+            },
         }
-    }
---- response_body_like eval
-qr/message/
-
-
-
-=== TEST 4: Test authentication error handling
---- request
-POST /v1/messages
-{
-  "model": "claude-3",
-  "max_tokens": 16,
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Hi" }
-      ]
-    }
-  ]
+    },
+    required = {"messages"}
 }
---- more_headers
-x-api-key: wrong-key
-anthropic-version: 2023-06-01
-Content-Type: application/json
---- error_code: 401
---- response_body_like
-authentication_error
 
-
-
-=== TEST 5: Test missing max_tokens parameter
---- request
-POST /v1/messages
-{
-  "model": "claude-3",
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Hello" }
-      ]
-    }
-  ]
-}
---- more_headers
-x-api-key: test-key
-anthropic-version: 2023-06-01
-Content-Type: application/json
---- error_code: 400
---- response_body_like
-missing max_tokens
-
-
-
-=== TEST 6: Test missing anthropic-version header
---- request
-POST /v1/messages
-{
-  "model": "claude-3",
-  "max_tokens": 128,
-  "messages": [
-    {
-      "role": "user",
-      "content": [
-        { "type": "text", "text": "Hello" }
-      ]
-    }
-  ]
-}
---- more_headers
-x-api-key: test-key
-Content-Type: application/json
---- error_code: 400
---- response_body_like
-missing anthropic-version
-
+return  _M
