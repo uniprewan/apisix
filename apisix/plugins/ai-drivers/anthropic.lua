@@ -173,7 +173,7 @@ function _M.request(self, ctx, conf, request_table, extra_opts)
     local anthropic_req = translate_request_to_anthropic(request_table, extra_opts.model_options or {})
 
     local headers = extra_opts.headers or {}
-    headers["anthropic-version"] = (extra_opts.model_options and extra_opts.model_options.anthropic_version) or "2025-11-01"
+    headers["anthropic-version"] = (extra_opts.model_options and extra_opts.model_options.anthropic_version) or "2023-06-01"
     headers["Content-Type"] = "application/json"
 
     local res, err = httpc:request({
