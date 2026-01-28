@@ -233,7 +233,7 @@ The following example shows how to configure the `ai-proxy` plugin to proxy requ
 Obtain the Anthropic [API key](https://console.anthropic.com/settings/keys) and save it to an environment variable:
 
 ```shell
-export ANTHROPIC_API_KEY=<your-api-key>
+export ANTHROPIC_API_KEY="your-api-key"
 ```
 
 Create a Route and configure the `ai-proxy` plugin. Note that for Anthropic, the `x-api-key` header is used for authentication, and `anthropic_version` and `max_tokens` are required parameters.
