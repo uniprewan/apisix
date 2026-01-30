@@ -193,7 +193,7 @@ _M.ai_proxy_schema = {
     required = {"provider", "auth"}
 }
 
--- 为 ai_proxy_schema 添加条件验证：当 provider 为 anthropic 时，使用特定的 options schema
+-- ai_proxy_schema 
 _M.ai_proxy_schema_with_anthropic = {
     type = "object",
     allOf = {
